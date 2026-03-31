@@ -188,3 +188,7 @@ curl http://localhost:8088/health
 ## 许可证
 
 MIT
+## 效果图
+
+<img width="564" height="926" alt="08749dc8155089d83052c18a627b0449" src="https://github.com/user-attachments/assets/436927a8-896a-4fbf-862f-34b74c1b4836" />
+

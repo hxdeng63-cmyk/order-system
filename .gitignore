@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Node
+node_modules/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store/
+Thumbs.db
+
+# Project specific
+*.zip
+*.json
+!login_test.json
+!login2.json
+
+# Environment
+.env
+.env.local

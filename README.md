@@ -191,4 +191,5 @@ MIT
 ## 效果图
 
 <img width="564" height="926" alt="08749dc8155089d83052c18a627b0449" src="https://github.com/user-attachments/assets/436927a8-896a-4fbf-862f-34b74c1b4836" />
+<img width="426" height="834" alt="image" src="https://github.com/user-attachments/assets/03b6c9d2-2f17-46b5-9f01-48db95b5bd34" />
 

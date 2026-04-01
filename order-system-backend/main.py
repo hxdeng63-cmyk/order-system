@@ -54,6 +54,7 @@ async def health():
 
 # 导入并注册路由（路由文件暂为空，稍后填充）
 from routers import auth, user, product, cart, order, merchant, dislike
+from routers.merchants import router as merchants_router
 from routers.upload import router as upload_router
 from routers.coins import router as coins_router
 from routers.coupons import router as coupons_router
@@ -65,6 +66,7 @@ app.include_router(dislike.router, prefix="/api", tags=["商品"])
 app.include_router(cart.router, prefix="/api/cart", tags=["购物车"])
 app.include_router(order.router, prefix="/api/orders", tags=["订单"])
 app.include_router(merchant.router, prefix="/api/merchant", tags=["商家"])
+app.include_router(merchants_router, prefix="/api/merchants", tags=["商家"])
 app.include_router(upload_router)
 app.include_router(coins_router, prefix="/api/coins", tags=["熊币"])
 app.include_router(coupons_router, prefix="/api/coupons", tags=["优惠券"])

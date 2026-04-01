@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Depends
 from typing import Optional
 from models import *
-from database import get_db
+from database import get_db, get_user_bound_merchant_id, get_merchant_product_table
 from utils.security import decode_token
 
 router = APIRouter()
@@ -21,13 +21,21 @@ async def get_cart(current_user: dict = Depends(get_current_user)):
     """获取购物车"""
     user_id = current_user["user_id"]
     async with get_db() as db:
-        cursor = await db.execute("""
+        # 获取用户绑定的商家ID
+        bound_merchant_id = await get_user_bound_merchant_id(db, user_id)
+        if not bound_merchant_id:
+            return {"code": 200, "data": {"items": [], "total": 0.0}}
+
+        # 获取商家商品表
+        product_table = await get_merchant_product_table(db, bound_merchant_id)
+
+        cursor = await db.execute(f"""
             SELECT ci.id, ci.product_id, p.name, p.price, p.icon, ci.qty, ci.spec, ci.checked
             FROM cart_items ci
-            JOIN products p ON ci.product_id = p.id
-            WHERE ci.user_id = ?
+            JOIN {product_table} p ON ci.product_id = p.id
+            WHERE ci.user_id = ? AND ci.merchant_id = ?
             ORDER BY ci.created_at DESC
-        """, (user_id,))
+        """, (user_id, bound_merchant_id))
         rows = await cursor.fetchall()
 
         items = []
@@ -65,10 +73,19 @@ async def add_cart_item(
     """添加商品到购物车"""
     user_id = current_user["user_id"]
 
-    # 验证商品存在且上架
+    # 验证商品存在且上架，并属于用户绑定的商家
     async with get_db() as db:
+        # 获取用户绑定的商家ID
+        bound_merchant_id = await get_user_bound_merchant_id(db, user_id)
+        if not bound_merchant_id:
+            raise HTTPException(status_code=400, detail="用户未绑定商家，无法添加商品到购物车")
+
+        # 获取商家商品表
+        product_table = await get_merchant_product_table(db, bound_merchant_id)
+
+        # 验证商品存在且上架
         cursor = await db.execute(
-            "SELECT id, name, price, status FROM products WHERE id = ?",
+            f"SELECT id, name, price, status FROM {product_table} WHERE id = ?",
             (item.productId,)
         )
         product = await cursor.fetchone()
@@ -82,8 +99,8 @@ async def add_cart_item(
         # 检查该商品是否已在购物车
         cursor = await db.execute("""
             SELECT id, qty FROM cart_items
-            WHERE user_id = ? AND product_id = ? AND spec = ?
-        """, (user_id, item.productId, item.spec))
+            WHERE user_id = ? AND product_id = ? AND spec = ? AND merchant_id = ?
+        """, (user_id, item.productId, item.spec, bound_merchant_id))
         existing = await cursor.fetchone()
 
         if existing:
@@ -95,9 +112,9 @@ async def add_cart_item(
         else:
             # 插入新记录
             await db.execute("""
-                INSERT INTO cart_items (user_id, product_id, qty, spec, checked)
-                VALUES (?, ?, ?, ?, 1)
-            """, (user_id, item.productId, item.qty, item.spec))
+                INSERT INTO cart_items (user_id, product_id, merchant_id, qty, spec, checked)
+                VALUES (?, ?, ?, ?, ?, 1)
+            """, (user_id, item.productId, bound_merchant_id, item.qty, item.spec))
 
         await db.commit()
 
@@ -197,12 +214,20 @@ async def get_cart_total(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
 
     async with get_db() as db:
-        cursor = await db.execute("""
+        # 获取用户绑定的商家ID
+        bound_merchant_id = await get_user_bound_merchant_id(db, user_id)
+        if not bound_merchant_id:
+            return {"code": 200, "data": {"total": 0, "discount": 0, "finalTotal": 0}}
+
+        # 获取商家商品表
+        product_table = await get_merchant_product_table(db, bound_merchant_id)
+
+        cursor = await db.execute(f"""
             SELECT ci.qty, ci.checked, p.price
             FROM cart_items ci
-            JOIN products p ON ci.product_id = p.id
-            WHERE ci.user_id = ?
-        """, (user_id,))
+            JOIN {product_table} p ON ci.product_id = p.id
+            WHERE ci.user_id = ? AND ci.merchant_id = ?
+        """, (user_id, bound_merchant_id))
         rows = await cursor.fetchall()
 
         total = 0.0

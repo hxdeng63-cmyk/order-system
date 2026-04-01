@@ -1,5 +1,12 @@
 <template>
   <view class="page">
+    <!-- 商家选择栏 -->
+    <view class="merchant-selector" @click="goToMerchantList">
+      <text class="merchant-label">当前商家：</text>
+      <text class="merchant-name">{{ currentMerchantName || '请选择商家' }}</text>
+      <text class="merchant-arrow">›</text>
+    </view>
+
     <!-- 搜索栏 -->
     <view class="home-header">
       <view class="search-bar" @click="showToast('搜索功能开发中')">
@@ -103,6 +110,8 @@ const banners = ref(mockBanners)
 const recommendedProducts = ref(mockProducts.slice(0, 4))
 const loading = ref(false)
 const coinBalance = ref(0)
+const currentMerchantName = ref('')
+const currentMerchantId = ref(null)
 
 const iconMap = {
   'cup': '🧋',
@@ -133,8 +142,15 @@ async function loadData() {
       }
     }
 
-    // 加载商品
-    const prodRes = await get('/api/products?limit=10')
+    // 获取当前选中的商家
+    const currentMerchantId = uni.getStorageSync('current_merchant_id')
+    
+    // 加载商品（如果选了商家则按商家筛选）
+    let prodUrl = '/api/products?limit=50'
+    if (currentMerchantId) {
+      prodUrl += `&merchantId=${currentMerchantId}`
+    }
+    const prodRes = await get(prodUrl)
     if (prodRes.code === 200 && prodRes.data) {
       recommendedProducts.value = prodRes.data.slice(0, 4)
       store.state.products = prodRes.data
@@ -166,6 +182,7 @@ function goToCoin() {
 }
 
 onMounted(() => {
+  loadCurrentMerchant()
   loadData()
 })
 
@@ -180,6 +197,19 @@ function showToast(message) {
     title: message,
     icon: 'none'
   })
+}
+
+function loadCurrentMerchant() {
+  const name = uni.getStorageSync('current_merchant_name')
+  const id = uni.getStorageSync('current_merchant_id')
+  if (name) {
+    currentMerchantName.value = name
+    currentMerchantId.value = id
+  }
+}
+
+function goToMerchantList() {
+  uni.navigateTo({ url: '/pages/merchants/index' })
 }
 
 function handleRefresh() {
@@ -215,6 +245,30 @@ const visibleProducts = computed(() => {
   min-height: 100vh;
   background: #FFFFFF;
   padding-bottom: 20px;
+}
+
+.merchant-selector {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 32rpx;
+  background: linear-gradient(135deg, #C8956C 0%, #D4A574 100%);
+  color: #FFFFFF;
+}
+
+.merchant-label {
+  font-size: 24rpx;
+  opacity: 0.9;
+}
+
+.merchant-name {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.merchant-arrow {
+  font-size: 32rpx;
+  opacity: 0.8;
 }
 
 .home-header {

@@ -148,7 +148,12 @@ export default {
       uni.showToast({ title: '已退出', icon: 'success' })
     },
     goToMerchant() {
-      uni.navigateTo({ url: '/pages/login/index' })
+      const merchantToken = uni.getStorageSync('merchant_token')
+      if (merchantToken) {
+        uni.navigateTo({ url: '/pages/merchant/index' })
+      } else {
+        uni.navigateTo({ url: '/pages/merchant/register' })
+      }
     },
     goToCoupon() {
       const token = uni.getStorageSync('token')

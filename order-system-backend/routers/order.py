@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime as dt_datetime
 
 from models import *
-from database import get_db
+from database import get_db, get_user_bound_merchant_id, get_merchant_product_table
 from utils.security import decode_token
 from utils.logger import get_logger
 
@@ -61,13 +61,26 @@ async def create_order(
     order_id = generate_order_id()
 
     async with get_db() as db:
+        # ========== 0. 获取用户绑定的商家ID ==========
+        cursor = await db.execute(
+            "SELECT bound_merchant_id FROM users WHERE id = ?",
+            (user_id,)
+        )
+        user_row = await cursor.fetchone()
+        bound_merchant_id = user_row["bound_merchant_id"] if user_row else None
+        if not bound_merchant_id:
+            return make_error({"code": 400, "errorCode": "NO_MERCHANT_BINDING", "message": "用户未绑定商家，无法下单"})
+
         # ========== 1. 验证商品并计算原价 ==========
         original_total = 0.0
         validated_items = []
 
+        # 获取商家商品表
+        product_table = await get_merchant_product_table(db, bound_merchant_id)
+
         for item in req.items:
             cursor = await db.execute(
-                "SELECT id, name, price, status FROM products WHERE id = ?",
+                f"SELECT id, name, price, status FROM {product_table} WHERE id = ?",
                 (item.productId,)
             )
             product_row = await cursor.fetchone()
@@ -161,9 +174,9 @@ async def create_order(
 
         # ========== 7. 插入订单 ==========
         await db.execute("""
-            INSERT INTO orders (id, user_id, status, total, remark, address_id, coupon_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (order_id, user_id, 'pending', final_total, req.remark or '', req.addressId, used_coupon_id))
+            INSERT INTO orders (id, user_id, merchant_id, status, total, remark, address_id, coupon_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (order_id, user_id, bound_merchant_id, 'pending', final_total, req.remark or '', req.addressId, used_coupon_id))
 
         # ========== 8. 插入订单项 ==========
         for item in validated_items:
@@ -180,13 +193,11 @@ async def create_order(
             )
 
         # ========== 10. 给商家发送新订单通知 ==========
-        cursor = await db.execute("SELECT id FROM merchants LIMIT 1")
-        merchant_row = await cursor.fetchone()
-        if merchant_row:
+        if bound_merchant_id:
             await db.execute("""
                 INSERT INTO notifications (merchant_id, type, title, content)
                 VALUES (?, ?, ?, ?)
-            """, (merchant_row["id"], 'order', '新订单', f'您有一个新订单 {order_id}，金额 {final_total} 元'))
+            """, (bound_merchant_id, 'order', '新订单', f'您有一个新订单 {order_id}，金额 {final_total} 元'))
 
         await db.commit()
 
@@ -463,8 +474,8 @@ async def complete_order(
         current_status = order_row["status"]
         logger.info(f"[确认取餐] order_id={order_id}, 当前状态={current_status}, user_id={user_id}")
 
-        # 只能确认 processing 或 completed 状态的订单
-        if current_status not in ("processing", "completed"):
+        # 只能确认 completed 状态的订单
+        if current_status != "completed":
             logger.warning(f"[确认取餐] 状态不允许, order_id={order_id}, current_status={current_status}")
             return make_error(OrderError.ORDER_STATUS_NOT_ALLOWED)
 

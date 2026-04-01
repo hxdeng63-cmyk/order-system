@@ -1,3 +1,4 @@
+# Python
 __pycache__
 *.pyc
 *.pyo
@@ -11,15 +12,50 @@ build
 .pytest_cache
 .coverage
 htmlcov
+
+# Git
 .git
 .gitignore
-.claude
-*.db
-data
-*.log
-.env
-.env.local
+
+# IDE & Editor
 .vscode
 .idea
+*.swp
+*.swo
+
+# Virtual environments
+venv
+.venv
+env
+.env
+
+# Documentation & project files
 *.md
+docs
 !requirements.txt
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+*.log
+logs/
+
+# Claude
+.claude
+.omc
+
+# Testing
+tests/
+test/
+*_test.py
+
+# Deploy (only needed at runtime)
+deploy/
+
+# OS
+.DS_Store
+Thumbs.db

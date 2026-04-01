@@ -15,8 +15,9 @@ class SendCodeRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     phone: str
-    code: str
     password: str
+    confirmPassword: str
+    inviteCode: str
 
 class LoginRequest(BaseModel):
     phone: str
@@ -34,6 +35,18 @@ class UserResponse(BaseModel):
     avatar: Optional[str] = ''
     memberLevel: str = 'normal'
     memberPoints: int = 0
+    boundMerchantId: Optional[int] = None
+
+class BindMerchantRequest(BaseModel):
+    inviteCode: str
+
+class BindStatusResponse(BaseModel):
+    bound: bool
+    merchantId: Optional[int] = None
+    merchantName: Optional[str] = None
+    merchantPhone: Optional[str] = None
+    merchantAddress: Optional[str] = None
+    merchantAvatar: Optional[str] = None
 
 # Category
 class CategoryResponse(BaseModel):
@@ -54,6 +67,8 @@ class ProductResponse(BaseModel):
     tag: str = ''
     sales: int = 0
     status: int = 1
+    merchantId: Optional[int] = 1
+    merchantName: str = ''
 
 class SpecResponse(BaseModel):
     name: str
@@ -98,7 +113,7 @@ class CartTotalResponse(BaseModel):
 class OrderItem(BaseModel):
     productId: int
     qty: int = 1
-    price: float
+    price: Optional[float] = None  # 客户端传入但服务器不使用，以服务器价格为准
     spec: str = "默认"
 
 class CreateOrderRequest(BaseModel):

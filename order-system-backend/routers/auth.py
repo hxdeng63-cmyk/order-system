@@ -74,18 +74,15 @@ async def send_code(req: SendCodeRequest):
 # 2. 用户注册
 @router.post("/register")
 async def register(req: RegisterRequest):
-    # 验证验证码
-    if not await verify_code(req.phone, req.code, "register"):
-        # 检查是过期还是错误
-        async with get_db() as db:
-            cursor = await db.execute(
-                "SELECT id FROM verification_codes WHERE phone=? AND type='register' AND expires_at <= datetime('now')",
-                (req.phone,)
-            )
-            expired = await cursor.fetchone()
-            if expired:
-                return make_error(AuthError.CODE_EXPIRED)
-            return make_error(AuthError.INVALID_CODE)
+    # 验证参数
+    if len(req.phone) != 11 or not req.phone.isdigit():
+        return make_error({"code": 400, "errorCode": "VALIDATION_ERROR", "message": "请输入正确的11位手机号"})
+
+    if len(req.password) < 6 or len(req.password) > 20:
+        return make_error({"code": 400, "errorCode": "VALIDATION_ERROR", "message": "密码长度必须在6-20字符之间"})
+
+    if req.password != req.confirmPassword:
+        return make_error({"code": 400, "errorCode": "PASSWORD_MISMATCH", "message": "两次密码输入不一致"})
 
     async with get_db() as db:
         # 检查手机号是否已注册
@@ -93,11 +90,29 @@ async def register(req: RegisterRequest):
         if await cursor.fetchone():
             return make_error(AuthError.PHONE_EXISTED)
 
-        # 创建用户
+        # 验证邀请码并获取商家信息
+        cursor = await db.execute(
+            "SELECT id, name FROM merchants WHERE invite_code=?",
+            (req.inviteCode,)
+        )
+        merchant = await cursor.fetchone()
+        if not merchant:
+            return make_error({"code": 400, "errorCode": "INVALID_INVITE_CODE", "message": "邀请码不存在"})
+        # 检查商家是否已被绑定
+        cursor = await db.execute(
+            "SELECT id FROM users WHERE bound_merchant_id=?",
+            (merchant["id"],)
+        )
+        if await cursor.fetchone():
+            return make_error({"code": 400, "errorCode": "MERCHANT_ALREADY_BOUND", "message": "该商家已被其他用户绑定"})
+        bound_merchant_id = merchant["id"]
+        merchant_name = merchant["name"]
+
+        # 创建用户（name默认为"用户"）
         hashed = get_password_hash(req.password)
         cursor = await db.execute(
-            "INSERT INTO users (phone, password_hash) VALUES (?, ?)",
-            (req.phone, hashed)
+            "INSERT INTO users (name, phone, password_hash, bound_merchant_id) VALUES (?, ?, ?, ?)",
+            ("用户", req.phone, hashed, bound_merchant_id)
         )
         await db.commit()
         user_id = cursor.lastrowid
@@ -111,7 +126,9 @@ async def register(req: RegisterRequest):
         "phone": req.phone,
         "avatar": "",
         "memberLevel": "normal",
-        "memberPoints": 0
+        "memberPoints": 0,
+        "boundMerchantId": bound_merchant_id,
+        "boundMerchantName": merchant_name
     }
 
     return make_response(data={"token": token, "user": user_data}, message="注册成功")
@@ -122,7 +139,7 @@ async def register(req: RegisterRequest):
 async def login(req: LoginRequest):
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, phone, password_hash, name, avatar, member_level, member_points FROM users WHERE phone=?",
+            "SELECT id, phone, password_hash, name, avatar, member_level, member_points, bound_merchant_id FROM users WHERE phone=?",
             (req.phone,)
         )
         user = await cursor.fetchone()
@@ -142,7 +159,8 @@ async def login(req: LoginRequest):
             "phone": user["phone"],
             "avatar": user["avatar"] or "",
             "memberLevel": user["member_level"],
-            "memberPoints": user["member_points"]
+            "memberPoints": user["member_points"],
+            "boundMerchantId": user["bound_merchant_id"]
         }
 
     return make_response(data={"token": token, "user": user_data, "expiresIn": 2592000}, message="登录成功")

@@ -3,9 +3,10 @@
  * 使用 uni.request
  */
 
-// API 基础地址（开发环境用 vite 代理，生产/APK 直连云端）
-// 重要：APK 打包时确保这里填的是云端地址
-const API_BASE_URL = 'http://47.110.86.191'
+// API 基础地址
+// 开发/本地测试：通过 nginx 访问时用 http://127.0.0.1
+// 生产/APK：直连云端 http://47.110.86.191
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL) || 'http://47.110.86.191'
 const API_BASE = API_BASE_URL + '/api'
 
 // 获取token
@@ -42,6 +43,8 @@ export const API = {
 
   // ========== 用户相关 ==========
   userProfile: `${API_BASE}/user/profile`,
+  userBindMerchant: `${API_BASE}/user/bind-merchant`,
+  userBindStatus: `${API_BASE}/user/bind-status`,
   userFavorites: `${API_BASE}/user/favorites`,
   userDislikes: `${API_BASE}/user/dislikes`,
   userAddresses: `${API_BASE}/user/addresses`,
@@ -63,6 +66,10 @@ export const API = {
   merchantCoinRequests: `${API_BASE}/coins/requests`,
   merchantCoinApprove: (id) => `${API_BASE}/coins/requests/${id}`,
   merchantCoinGrant: `${API_BASE}/coins/grant`,
+
+  // ========== 商家相关 ==========
+  merchants: `${API_BASE}/merchants`,
+  merchantDetail: (id) => `${API_BASE}/merchants/${id}`,
 
   // ========== 认证相关 ==========
   login: `${API_BASE}/auth/login`,

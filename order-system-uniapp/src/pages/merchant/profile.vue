@@ -213,7 +213,12 @@ export default {
       }, 1000)
     },
     goToShopInfo() {
-      uni.showToast({ title: '店铺信息', icon: 'none' })
+      uni.showModal({
+        title: '店铺信息',
+        content: `店铺名称：${this.merchant.name}\n商家ID：${this.merchant.id}\n邀请码：${this.merchant.inviteCode || '无'}\n\n提示：邀请码用于客户注册时绑定本商家`,
+        showCancel: false,
+        confirmText: '知道了'
+      })
     },
     goToCategories() {
       uni.showToast({ title: '商品分类', icon: 'none' })

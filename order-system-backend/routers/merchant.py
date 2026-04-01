@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Header, Query, Path
 from typing import Optional
+import uuid
 from models import *
-from database import get_db
-from utils.security import decode_token, verify_password, create_access_token
+from database import get_db, create_merchant_products_table, get_merchant_product_table
+from utils.security import decode_token, verify_password, create_access_token, get_password_hash
 from utils.logger import get_logger
 
 router = APIRouter()
@@ -53,6 +54,78 @@ async def merchant_login(req: dict):
         return {"code": 200, "message": "登录成功", "data": {"token": token, "merchant": merchant}}
 
 
+# ============ 商家注册 ============
+class MerchantRegisterRequest(BaseModel):
+    name: str
+    password: str
+    confirmPassword: str
+
+
+@router.post("/register")
+async def merchant_register(req: MerchantRegisterRequest):
+    """商家注册"""
+    # 验证参数
+    if len(req.name) < 2 or len(req.name) > 20:
+        raise HTTPException(status_code=400, detail="姓名长度必须在2-20字符之间")
+
+    if len(req.password) < 6 or len(req.password) > 20:
+        raise HTTPException(status_code=400, detail="密码长度必须在6-20字符之间")
+
+    if req.password != req.confirmPassword:
+        raise HTTPException(status_code=400, detail="两次密码输入不一致")
+
+    async with get_db() as db:
+        # 检查姓名是否已存在
+        cursor = await db.execute(
+            "SELECT id FROM merchants WHERE name = ?",
+            (req.name,)
+        )
+        if await cursor.fetchone():
+            raise HTTPException(status_code=400, detail="姓名已被注册")
+
+        # 创建商家（username从name生成，确保唯一）
+        hashed = get_password_hash(req.password)
+        base_username = req.name.replace(" ", "").lower()
+
+        # 检查username是否已存在
+        cursor = await db.execute("SELECT id FROM merchants WHERE username = ?", (base_username,))
+        if await cursor.fetchone():
+            raise HTTPException(status_code=400, detail="用户名已被注册")
+        username = base_username
+        
+        # 生成8位唯一邀请码（使用UUID后8位，碰撞概率极低）
+        invite_code = uuid.uuid4().hex[-8:].upper()
+        # 简单检查是否已存在（UUID碰撞概率极低）
+        cursor = await db.execute("SELECT id FROM merchants WHERE invite_code = ?", (invite_code,))
+        if await cursor.fetchone():
+            invite_code = uuid.uuid4().hex[-8:].upper()
+        
+        cursor = await db.execute(
+            "INSERT INTO merchants (name, username, password_hash, invite_code) VALUES (?, ?, ?, ?)",
+            (req.name, username, hashed, invite_code)
+        )
+        await db.commit()
+        merchant_id = cursor.lastrowid
+
+        # 为新商家创建专属商品表
+        await create_merchant_products_table(db, merchant_id)
+        await db.commit()
+
+        # 生成token
+        token = create_access_token({"sub": str(merchant_id), "type": "merchant"})
+
+        merchant_data = {
+            "id": merchant_id,
+            "name": req.name,
+            "phone": "",
+            "address": "",
+            "avatar": "",
+            "inviteCode": invite_code
+        }
+
+        return {"code": 200, "message": "注册成功", "data": {"token": token, "merchant": merchant_data}}
+
+
 # ============ 商家信息 ============
 @router.get("/profile")
 async def get_merchant_profile(authorization: Optional[str] = Header(None)):
@@ -65,7 +138,7 @@ async def get_merchant_profile(authorization: Optional[str] = Header(None)):
     merchant_id = int(payload.get("sub"))
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, name, phone, address, avatar, created_at FROM merchants WHERE id = ?",
+            "SELECT id, name, phone, address, avatar, invite_code, created_at FROM merchants WHERE id = ?",
             (merchant_id,)
         )
         row = await cursor.fetchone()
@@ -78,7 +151,8 @@ async def get_merchant_profile(authorization: Optional[str] = Header(None)):
             "name": row["name"],
             "phone": row["phone"] or "",
             "address": row["address"] or "",
-            "avatar": row["avatar"] or ""
+            "avatar": row["avatar"] or "",
+            "inviteCode": row["invite_code"] or ""
         }
 
 
@@ -97,17 +171,17 @@ async def get_today_stats(authorization: Optional[str] = Header(None)):
         cursor = await db.execute("""
             SELECT COALESCE(SUM(total), 0) as revenue, COUNT(*) as orders
             FROM orders
-            WHERE status = 'completed'
+            WHERE merchant_id = ? AND status = 'completed'
             AND date(created_at) = date('now', '+8 hours')
-        """)
+        """, (merchant_id,))
         row = await cursor.fetchone()
         revenue = row["revenue"] or 0
         orders = row["orders"] or 0
 
         # 今日待处理订单数（pending + paid），排除商家已删除的（使用中国时区）
         cursor = await db.execute("""
-            SELECT COUNT(*) as pending FROM orders WHERE status IN ('pending', 'paid') AND merchant_deleted = 0 AND date(created_at) = date('now', '+8 hours')
-        """)
+            SELECT COUNT(*) as pending FROM orders WHERE merchant_id = ? AND status IN ('pending', 'paid') AND merchant_deleted = 0 AND date(created_at) = date('now', '+8 hours')
+        """, (merchant_id,))
         row = await cursor.fetchone()
         pending = row["pending"] or 0
 
@@ -158,14 +232,15 @@ async def get_merchant_orders(
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
-    # 注意：当前设计为单商家系统，订单关联商品而非商家
-    # 多商家场景需要扩展orders表添加merchant_id字段
     offset = (page - 1) * limit
 
     async with get_db() as db:
+        # 从token获取merchant_id
+        merchant_id = int(payload.get("sub"))
+
         # 构建查询条件
-        where_clauses = ["1=1", "merchant_deleted = 0"]  # 排除商家已删除的订单
-        params = []
+        where_clauses = ["1=1", "merchant_id = ?", "merchant_deleted = 0"]  # 排除商家已删除的订单
+        params = [merchant_id]
 
         if status == "new":
             where_clauses.append("status IN ('pending', 'paid')")
@@ -367,19 +442,21 @@ async def complete_order(
 # ============ 商品列表 ============
 @router.get("/products")
 async def get_merchant_products(authorization: Optional[str] = Header(None)):
-    """获取商家商品列表"""
+    """获取商家商品列表（从per-merchant表）"""
     if not authorization:
         raise HTTPException(status_code=401, detail="缺少Authorization头")
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     import json
 
     async with get_db() as db:
-        cursor = await db.execute("""
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"""
             SELECT p.id, p.name, p.price, p.status, p.sales, p.icon, p.images,
                    c.name as category
-            FROM products p
+            FROM {product_table} p
             LEFT JOIN categories c ON p.category_id = c.id
             ORDER BY p.id DESC
         """)
@@ -405,12 +482,13 @@ async def add_product(
     body: dict,
     authorization: Optional[str] = Header(None)
 ):
-    """添加商品"""
+    """添加商品到商家专属表"""
     if not authorization:
         raise HTTPException(status_code=401, detail="缺少Authorization头")
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     import json
 
     name = body.get("name")
@@ -427,8 +505,9 @@ async def add_product(
     images_json = json.dumps(images) if images else "[]"
 
     async with get_db() as db:
-        cursor = await db.execute("""
-            INSERT INTO products (name, desc, price, category_id, icon, images, status)
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"""
+            INSERT INTO {product_table} (name, `desc`, price, category_id, icon, images, status)
             VALUES (?, ?, ?, ?, ?, ?, 1)
         """, (name, desc, price, category_id, icon, images_json))
         await db.commit()
@@ -450,8 +529,10 @@ async def update_product(
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
-        cursor = await db.execute("SELECT id FROM products WHERE id = ?", (product_id,))
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"SELECT id FROM {product_table} WHERE id = ?", (product_id,))
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="商品不存在")
 
@@ -466,7 +547,7 @@ async def update_product(
             updates.append("price = ?")
             params.append(body["price"])
         if "desc" in body:
-            updates.append("desc = ?")
+            updates.append("`desc` = ?")
             params.append(body["desc"])
         if "categoryId" in body:
             updates.append("category_id = ?")
@@ -477,7 +558,7 @@ async def update_product(
 
         if updates:
             params.append(product_id)
-            await db.execute(f"UPDATE products SET {', '.join(updates)} WHERE id = ?", params)
+            await db.execute(f"UPDATE {product_table} SET {', '.join(updates)} WHERE id = ?", params)
             await db.commit()
 
         return {"code": 200, "message": "更新成功"}
@@ -495,15 +576,17 @@ async def toggle_product_status(
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
-        cursor = await db.execute("SELECT id, status FROM products WHERE id = ?", (product_id,))
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"SELECT id, status FROM {product_table} WHERE id = ?", (product_id,))
         row = await cursor.fetchone()
 
         if not row:
             raise HTTPException(status_code=404, detail="商品不存在")
 
         new_status = 0 if row["status"] == 1 else 1
-        await db.execute("UPDATE products SET status = ? WHERE id = ?", (new_status, product_id))
+        await db.execute(f"UPDATE {product_table} SET status = ? WHERE id = ?", (new_status, product_id))
         await db.commit()
 
         return {"code": 200, "message": "状态已更新"}
@@ -521,12 +604,14 @@ async def delete_product(
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
-        cursor = await db.execute("SELECT id FROM products WHERE id = ?", (product_id,))
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"SELECT id FROM {product_table} WHERE id = ?", (product_id,))
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="商品不存在")
 
-        await db.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        await db.execute(f"DELETE FROM {product_table} WHERE id = ?", (product_id,))
         await db.commit()
 
         return {"code": 200, "message": "删除成功"}
@@ -544,7 +629,9 @@ async def get_stats(
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
+        product_table = await get_merchant_product_table(db, merchant_id)
         # 获取时间范围（使用中国时区 UTC+8）
         date_clause = "date('now', '+8 hours')"
         prev_date_clause = "date('now', '+8 hours', '-7 days')"
@@ -595,8 +682,8 @@ async def get_stats(
         if prev_avg > 0:
             avg_change = round((avg_order_value - prev_avg) / prev_avg * 100, 1)
 
-        # 商品数量
-        cursor = await db.execute("SELECT COUNT(*) as count FROM products WHERE status = 1")
+        # 商品数量（使用商家专属表）
+        cursor = await db.execute(f"SELECT COUNT(*) as count FROM {product_table} WHERE status = 1")
         row = await cursor.fetchone()
         product_count = row["count"] or 0
 
@@ -622,10 +709,10 @@ async def get_stats(
             else:
                 trend.append({"date": day, "revenue": 0, "orders": 0})
 
-        # 热销商品TOP5
-        cursor = await db.execute("""
+        # 热销商品TOP5（使用商家专属表）
+        cursor = await db.execute(f"""
             SELECT p.id, p.name, p.sales, p.price
-            FROM products p
+            FROM {product_table} p
             WHERE p.status = 1
             ORDER BY p.sales DESC
             LIMIT 5
@@ -673,7 +760,9 @@ async def get_stats_trend(authorization: Optional[str] = Header(None)):
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
+        product_table = await get_merchant_product_table(db, merchant_id)
         from datetime import datetime as dt, timedelta
 
         # 最近7天的趋势
@@ -705,10 +794,12 @@ async def get_top_products(authorization: Optional[str] = Header(None)):
     payload = decode_token(authorization.replace("Bearer ", ""))
     if not payload or payload.get("type") != "merchant":
         raise HTTPException(status_code=401, detail="无效的token")
+    merchant_id = int(payload.get("sub"))
     async with get_db() as db:
-        cursor = await db.execute("""
+        product_table = await get_merchant_product_table(db, merchant_id)
+        cursor = await db.execute(f"""
             SELECT id, name, sales, price
-            FROM products
+            FROM {product_table}
             WHERE status = 1
             ORDER BY sales DESC
             LIMIT 5

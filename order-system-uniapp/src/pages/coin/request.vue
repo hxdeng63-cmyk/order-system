@@ -79,7 +79,11 @@ async function submitRequest() {
     return
   }
 
-  const merchantId = selectedMerchant.value?.id || 1
+  const merchantId = selectedMerchant.value?.id
+  if (!merchantId) {
+    uni.showToast({ title: '请先选择商家', icon: 'none' })
+    return
+  }
 
   try {
     const res = await post('/api/coins/request', {

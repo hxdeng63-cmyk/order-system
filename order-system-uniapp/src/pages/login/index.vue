@@ -101,6 +101,9 @@
         <text v-if="!loading">登录</text>
         <text v-else>登录中...</text>
       </button>
+      <view class="form-footer">
+        <text class="link-text" @click="goRegister">没有账号？去注册</text>
+      </view>
       <view class="login-tip">
         <text class="tip-text">测试账号: 布布 / 123456</text>
       </view>
@@ -200,7 +203,7 @@ export default {
       this.loading = false
     },
     goRegister() {
-      uni.showToast({ title: '注册功能开发中', icon: 'none' })
+      if (this.identity === 'user') { uni.navigateTo({ url: '/pages/register/index' }) } else { uni.navigateTo({ url: '/pages/merchant/register' }) }
     }
   }
 }
